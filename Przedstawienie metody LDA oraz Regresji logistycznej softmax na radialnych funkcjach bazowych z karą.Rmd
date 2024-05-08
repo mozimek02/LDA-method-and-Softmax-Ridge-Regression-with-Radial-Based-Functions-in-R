@@ -1,0 +1,383 @@
+---
+title: "Projekt Analiza Danych w badaniach naukowych"
+author: "Mikołaj Ozimek"
+date: "2024-02-08"
+output: github_document
+---
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Pakiety -----------------------------------------------------------------
+library(MASS)
+library(klaR)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(glmnet)
+library(nnet)
+library(lattice)
+library(stepPlr)
+```
+
+<font size = 5>Wstępne sprawdzenie danych.</font>
+
+<font size = 4>Sprawdźmy czy w danych występują jakieś wartości nieliczbowe lub nieznane.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+dane <- read.csv("dane34.csv")
+
+sprawdz_dane <- function(x){
+  bledy = 0
+  for(zmienna in colnames(x)){
+    if(TRUE %in% cbind(is.na(x$zmienna),is.nan(x$zmienna))){
+      bledy = bledy + 1
+    }
+  }
+print(bledy)
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sprawdz_dane2 <- function(x){
+  odstajace = 0
+  for(zmienna in colnames(x)){
+    for(i in x$zmienna){
+      if(i > 1.5*IQR(x$zmienna)){
+        odstajace = odstajace + 1
+      }
+    }
+  }
+print(odstajace)
+}
+```
+
+<font size = 4>Nie musimy poprawiać danych (Nie wymagają imputacji). </font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sprawdz_dane(dane)
+```
+
+<font size = 4>Zobaczmy czy dane wymagają skalowania (Czy pojawiają sie jakieś wartości odstające).</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sprawdz_dane2(dane)
+```
+
+<font size = 4>Zobaczmy jakie są typy poszczególnych zmiennych. </font>
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+cbind(A=class(dane$A),B=class(dane$B),Class=class(dane$Class))
+dane$Class <- factor(dane$Class)
+class(dane$Class)
+```
+<font size = 4>Jedynie typ zmiennej zależnej musiał zostać zmieniony na factor. </font>
+
+<font size = 5>Klasyfikacja za pomocą algorytmu LDA.</font>
+
+<font size = 4>Zobaczymy wstępny wykres danych. </font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(data=dane,
+       mapping = aes(A,B,col=Class))+
+  geom_point()
+```
+
+<font size = 4>Zmienna decyzyjna przyjmuje 3 wartości, które jak widać na wykresie nie są liniowo separowalne. Zobaczmy, czy za pomocą dwóch zmiennych kanonicznych uda się odseparować obserwacje.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_lda <- lda(Class~A+B,data = dane)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+lda_predykcje <- predict(model_lda)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+zm_kan1 <- lda_predykcje$x[,1]
+zm_kan2 <- lda_predykcje$x[,2]
+```
+
+<font size = 4>Stwórzmy nową ramkę danych w celu przedstawienia na wykresie nowych zmiennych.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+dane_kanoniczne <- data.frame(zm_kan1,zm_kan2,Class = dane$Class)
+dane_kanoniczne$Class <- factor(dane_kanoniczne$Class)
+head(dane_kanoniczne,4)
+```
+
+<font size = 4>W metodzie LDA rzutujemy nasze obserwacje względem wektorów kanonicznych, w celu zwiększenia odległości pomiędzy środkami poszególnych klas oraz zmniejszeniu wariancji wewnątrz klas. Jeżeli dane są lepiej od siebie odseparowane to klasyfikator będzie działał lepiej, popełniając mniej błędów.</font>
+
+<font size = 4>Zobaczmy wykres klasyfikacji po przeprowadzeniu algorytmu</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+partimat(Class~zm_kan1+zm_kan2,data=dane_kanoniczne)
+```
+
+<font size = 4>Punkty leżące na wykresie nie są liniowo separowalne. Zrzutowanie obserwacji na nową przestrzeń nie pomogło. Jest to spowodowane tym, że zmienne kanoniczne są kombinacją liniową oryginalnych zmiennych a nie ich funkcją liniową. Mówimy tutaj w szczególności o punktach z klasy 3, będących otoczonymi przez punkty z klasy 2, które nie mogą być odseparowane poprzez wykonanie jedynie algorytmu.</font>
+
+<font size = 4>Spróbujmy wykonać transformację obserwacji z klasy 3 w celu zwiększenie separowalności danych wejściowych.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+trans <- dane %>%
+  select(A,B,Class) %>%
+  filter(Class == 3)
+
+trans$A <- (trans$A)*1.5
+trans$B <- (trans$B)*1.5
+
+dane2 <- dane %>%
+  select(A,B,Class) %>%
+  filter(Class != 3)
+
+dane_trans <- rbind(dane2,trans)
+```
+
+<font size = 4>Wszelkie transformacje pokroju pierwiastka kwadratowego,logarytmu, czy potęgi nie dawały zamierzonych rezultatów.</font>
+
+<font size = 4>Zobaczmy jak wyglądają obserwacje ze zmiennej 3 po pomnożeniu przez 1.5.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane_trans$A,dane_trans$B,col=dane_trans$Class)
+```
+
+<font size = 4>Stwórzmy model jeszcze raz. Teraz zastosujemy przekształcone dane.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_lda2 <- lda(Class~A+B,data = dane_trans)
+lda_trans_predykcje <- predict(model_lda2)
+zm_kan_trans1 <- lda_trans_predykcje$x[,1]
+zm_kan_trans2 <- lda_trans_predykcje$x[,2]
+dane_trans_kanoniczne <- data.frame(zm_kan_trans1,zm_kan_trans2,Class = dane$Class)
+dane_trans_kanoniczne$Class <- factor(dane_trans_kanoniczne$Class)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+partimat(Class~zm_kan_trans1+zm_kan_trans2,data = dane_trans_kanoniczne)
+```
+
+<font size = 4>Sprawdźmy jak model radzi sobie z nowymi danymi. Wykorzystam w tym celu n-krotną i 10-krotną kroswalidację.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+train(Class~zm_kan_trans1+zm_kan_trans2,data=dane_trans_kanoniczne,method="lda",
+               trControl = trainControl(method="LOOCV"))
+```
+
+<font size = 4>Zarówno Współczynnik Accuracy jak i statystyka Kappa wyniosły 1. Oznacza to, że klasyfikator nie pomylił się nawet raz.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+train(Class~zm_kan_trans1+zm_kan_trans2,data = dane_trans_kanoniczne,method = "lda",
+              trControl = trainControl(method="cv",number=10))
+```
+
+<font size = 4>W przypadku 10-krotnej kroswalidacji również otrzymaliśmy idealne klasyfikatory.</font>
+
+<font size = 4>Ponieważ wejściowy zbiór danych nie był liniowo separowalny zarówno na początku jak i po zamianie na zmienne kanoniczne, wymagana była pewna transformacja obserwacji z klasy 3. W sytuacji gdybyśmy chcieli zaklasyfikować nową obserwację o nieznanej wartości zmiennej celu, mającej cechy obserwacji z klasy 3 przed transformacją, to powinniśmy ją również przekształcić w celu poprawnej klasyfikacji. Zaobrazuję to przykładem.</font>
+
+<font size = 4>Założmy, że nowa obserwacja ma podane wartości zmiennych niezależnych: 0.010693628 oraz 0.02116404. Zaznaczmy ją na wykresie.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane_trans$A,dane_trans$B,col=dane_trans$Class)
+points(0.010693628,0.02116404,col="darkgreen")
+```
+
+<font size = 4>Tak jak widać byłaby zaklasyfikowana do klasy 2. Po przekształceniu 1.5 powinna znaleźć się w poprawnej klasie.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane_trans$A,dane_trans$B,col=dane_trans$Class)
+points(0.010693628*1.5,0.02116404*1.5,col="darkgreen")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane_trans_kanoniczne$zm_kan_trans1,dane_trans_kanoniczne$zm_kan_trans2,col=dane_kanoniczne$Class)
+```
+
+<font size = 4>Wykres klasyfikacji obserwacji dla zmiennych kanonicznych.</font>
+
+
+<font size = 5>Model regresji logistycznej</font>
+
+<font size = 4>Wykonajmy najpierw zwykłą regresję logistyczną.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_reglog <- multinom(Class~A+B,data= dane_trans)
+predykcje <- predict(model_reglog)
+table(dane_trans$Class,predykcje)
+```
+
+<font size = 4>Podobnie jak w przypadku LDA, chcąc stworzyć obszary decyzyjne, obserwacje muszą być liniowo separowalne.
+Z tego powodu wykorzystałem przetransformowane dane. Jest to spowodowane tym, że granicą decyzyjną w regresji
+logistycznej jest pewna funkcja liniowa. W tym przypadku mamy do czynienia z regresją softmax, o 3 wartościach zmiennej decyzyjnej więc będą to 2 funkcje liniowe jako funkcje decyzyjne.</font>
+
+<font size = 4>Wykonajmy model regresji logistycznej z karą. </font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+glmnet1=glmnet(x=dane_trans[,1:2],y=dane_trans$Class,family="multinomial",
+       lambda=0,alpha=0)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_pred1 <- train(Class~A+B,data=dane_trans,method="glmnet",
+      trControl=trainControl("cv"),
+      tuneGrid=data.frame(alpha=0,
+      lambda=c(1,0.1,0.01,0.001,0.0001,0.00001)))
+dane_pred1 <- predict.train(model_pred1)
+model_pred1
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+model_pred2 <- train(Class~A+B,data=dane_trans,method="glmnet",
+      trControl=trainControl("LOOCV"),
+      tuneGrid=data.frame(alpha=0,
+      lambda=c(1,0.1,0.01,0.001,0.0001,0.00001)))
+dane_pred2 <- predict.train(model_pred2)
+model_pred2
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane_trans$A,dane_trans$B,col=dane_pred2)
+```
+
+<font size = 4>W modelu regresji logistycznej z karą model pomylił się w paru przypadkach.</font>
+
+<font size = 4>Wykonajmy teraz model regresji logistycznej na danych wejściowych(nieliniowych) przy wykorzystaniu funkcji bazowych.</font>
+
+<font size = 4>Stwórzmy nowe zmienne będące zmiennymi objaśniającymi w nowym modelu.</font>
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+nowe_dane <- data.frame()
+phi1=function(punkt,sr){
+  sqrt(sum((punkt-sr)^2))
+}
+n1=6
+n2=1
+mu1=seq(-7,7,length.out = n1) 
+mu2=seq(-1,7,length.out = n2) 
+siatka=expand.grid(mu1=mu1,mu2=mu2)
+for(i in 1:(n1*n2)){
+  for(j in 1:266){
+    nowe_dane[j,i]=phi1(dane[j,1:2],siatka[i,])
+  }
+}
+head(nowe_dane,4)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.show='hold'}
+set.seed(456)
+nowa_ramka <- cbind(nowe_dane,Class = dane$Class)
+model_reggrz <- glmnet(nowa_ramka[,1:6],nowa_ramka$Class, family = "multinomial",alpha=0)
+```
+
+```{r, figures-side, fig.show="hold", out.width="50%",echo=FALSE, warning=FALSE, message=FALSE}
+plot(model_reggrz,xvar="lambda",label = TRUE)
+```
+
+<font size = 4>Powyższe wykresy tworzą wiele różnych współczynników dla modelu ze względu na parametr lambdy w regresji grzebietowej. Algorytm testował model na wielu różnych lambdach, lecz na osi OX umieścił z nich logarytm. Zauważmy, że duże wartości lambdy powodują, iż wspołczynniki zbliżają się do 0. Powoduje to niedoucznie modelu. Dlatego staramy się wybierać mniejszą lambdę w celu stworzenia odpowieniego modelu.
+
+<font size = 4>Musimy wybrać najlepszy parametr lambda oraz najbardziej zoptymalizowane współczynniki dla naszego modelu. W tym celu wykorzystamy kroswalidację.</font>
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+kroswalidacja <- cv.glmnet(as.matrix(nowa_ramka[,1:6]),nowa_ramka$Class, family = "multinomial" ,alpha=0, type.measure = "class",nfolds = 10)
+plot(kroswalidacja)
+kroswalidacja
+```
+
+<font size = 4>W przypadku funkcji glmnet błąd klasyfikacji wyniósł jedynie 0.06015 dla lambdy wyznaczonej przez funkcję.</font>
+
+<font size = 4>Zobaczmy jak wygląda model dla mniejszej ilości zmiennych powstałych z funkcji radialnych.</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+nowa_ramka2 <- data.frame()
+phi1=function(punkt,sr){
+  sqrt(sum((punkt-sr)^2))
+}
+n1=4
+n2=1
+mu1=seq(-4,4,length.out = n1) 
+mu2=seq(-1,4,length.out = n2) 
+siatka=expand.grid(mu1=mu1,mu2=mu2)
+for(i in 1:(n1*n2)){
+  for(j in 1:266){
+    nowa_ramka2[j,i]=phi1(dane[j,1:2],siatka[i,])
+  }
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+kroswalidacja2 <- cv.glmnet(as.matrix(nowa_ramka2[,1:4]),nowa_ramka$Class, family = "multinomial",alpha=0, type.measure = "class",nfolds = 10)
+plot(kroswalidacja2)
+kroswalidacja2
+```
+
+<font size = 4>W przypadku zmniejszenia ilości zmiennych bazowych do 4 dokładność modelu była ponownie 0.06015. Możemy więc uznać, że poprzedni model był odpowiedni.</font>
+
+<font size = 5>Sprawdźmy klasyfikację dla innej funkcji bazowej</font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+nowa_ramka3 = data.frame()
+phi2=function(punkt,sr,os){
+  exp(-sum((punkt-sr)^2)/(2*os^2))
+}
+n3=6
+n4=1
+l=1
+mu3=seq(-7,7,length.out = n3)
+mu4=seq(-1,7,length.out = n4)
+siatka=expand.grid(mu3=mu3,mu4=mu4)
+for(i in 1:(n3*n4)){
+  for(j in 1:266){
+    nowa_ramka3[j,i]=phi2(dane[j,1:2],siatka[i,],l)
+  }
+}
+nowa_ramka3$Class=dane[,3]
+glmnet3 <- glmnet(x=nowa_ramka3[,1:6],y=nowa_ramka3$Class,family="multinomial",
+               lambda=0.001,alpha=0)
+wynik3 <- train(Class~.,data=nowa_ramka3,method="glmnet",
+      trControl=trainControl("cv"))
+wynik3a <- train(Class~.,data=nowa_ramka3,method="glmnet",
+      trControl=trainControl("LOOCV"))
+wynik3
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(456)
+nowa_ramka4 = data.frame()
+phi2=function(punkt,sr,os){
+  exp(-sum((punkt-sr)^2)/(2*os^2))
+}
+n5=4
+n6=1
+l2=3
+mu5=seq(-7,7,length.out = n5)
+mu6=seq(-1,7,length.out = n6)
+siatka=expand.grid(mu5=mu5,mu6=mu6)
+for(i in 1:(n5*n6)){
+  for(j in 1:266){
+    nowa_ramka4[j,i]=phi2(dane[j,1:2],siatka[i,],l2)
+  }
+}
+nowa_ramka4$Class=dane[,3]
+glmnet4 <- glmnet(x=nowa_ramka4[,1:4],y=nowa_ramka4$Class,family="multinomial",
+               lambda=0.001,alpha=0)
+wynik4 <- train(Class~.,data=nowa_ramka4,method="glmnet",
+      trControl=trainControl("cv"))
+wyni4a <- train(Class~.,data=nowa_ramka4,method="glmnet",
+      trControl=trainControl("LOOCV"))
+wynik4
+```
+
+<font size = 4>Dla obu funkcji bazowych poziom poprawnej klasyfikacji był wysoki. Największą trudność dla klasyfikatora stanowiły obserwacje z klasy 3, których nie potrafił odseparować
+od pozostałych i wyłącznie dla nich pojawiał się błąd klasyfikacji. </font>
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(dane$A,dane$B,col = predict.train(wynik4))
+```
+
+<font size = 4>Zmiany współczynników l oraz m_i tylko nieznacznie zmieniały obszary klasyfikacji.  </font>
